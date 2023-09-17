@@ -6,37 +6,37 @@ from telebot.apihelper import ApiTelegramException
 from datetime import datetime
 from app.telegram.utils.keyboard import BotKeyboard
 from app.utils.system import readable_size
-from config import TELEGRAM_ADMIN_ID
+from config import TELEGRAM_ADMIN_ID, TELEGRAM_LOGGER_CHANNEL_ID
 from telebot.formatting import escape_html
 
 
 def report(message: str, parse_mode="html", keyboard=None):
-    if bot and TELEGRAM_ADMIN_ID:
+    if bot and (TELEGRAM_ADMIN_ID or TELEGRAM_LOGGER_CHANNEL_ID):
         try:
-            bot.send_message(TELEGRAM_ADMIN_ID, message, parse_mode=parse_mode, reply_markup=keyboard)
+            if TELEGRAM_LOGGER_CHANNEL_ID:
+                bot.send_message(TELEGRAM_LOGGER_CHANNEL_ID, message, parse_mode=parse_mode)
+            else:
+                for admin in TELEGRAM_ADMIN_ID:
+                    bot.send_message(admin, message, parse_mode=parse_mode, reply_markup=keyboard)
         except ApiTelegramException as e:
             logger.error(e)
 
 
-def report_new_user(user_id: int, username: str, by: str, expire_date: int, usage: str, proxies: list):
-    text = """
-⨁ New User Added by <b>{by}</b>
-➖➖➖➖➖➖➖
-┌ Username: <b>{username}</b>
-├ Usage: <b>{usage}</b>
-└ Expiry Date <b>{expire_date}</b>
-┌ Created Proxies:
-{proxies}
-    """.format(
+def report_new_user(user_id: int, username: str, by: str, expire_date: int, data_limit: int, proxies: list):
+    text = '''\
+🆕 <b>#Created</b>
+➖➖➖➖➖➖➖➖➖
+<b>Username :</b> <code>{username}</code>
+<b>Traffic Limit :</b> <code>{data_limit}</code>
+<b>Expire Date :</b> <code>{expire_date}</code>
+<b>Proxies :</b> <code>{proxies}</code>
+➖➖➖➖➖➖➖➖➖
+<b>By :</b> <b>#{by}</b>'''.format(
         by=escape_html(by),
         username=escape_html(username),
-        usage=readable_size(usage) if usage else "Unlimited",
+        data_limit=readable_size(data_limit) if data_limit else "Unlimited",
         expire_date=datetime.fromtimestamp(expire_date).strftime("%H:%M:%S %Y-%m-%d") if expire_date else "Never",
-        proxies="" if not proxies else "\n".join([
-            "├ {}".format(
-                escape_html(proxy.type),
-            ) for proxy in proxies
-        ])
+        proxies="" if not proxies else ", ".join([escape_html(proxy) for proxy in proxies])
     )
 
     return report(
@@ -49,20 +49,22 @@ def report_new_user(user_id: int, username: str, by: str, expire_date: int, usag
     )
 
 
-def report_user_modification(username: str, expire_date: int, usage: str, proxies: list, by: str):
-    text = """
-⨀ User Modified by <b>{by}</b>
-➖➖➖➖➖➖➖
-┌ Username: <b>{username}</b>
-├ Usage: <b>{usage}</b>
-├ Expiry Date <b>{expire_date}</b>
-└ Protocols: {protocols}
-    """.format(
+def report_user_modification(username: str, expire_date: int, data_limit: int, proxies: list, by: str):
+    text = '''\
+✏️ <b>#Modified</b>
+➖➖➖➖➖➖➖➖➖
+<b>Username :</b> <code>{username}</code>
+<b>Traffic Limit :</b> <code>{data_limit}</code>
+<b>Expire Date :</b> <code>{expire_date}</code>
+<b>Protocols :</b> <code>{protocols}</code>
+➖➖➖➖➖➖➖➖➖
+<b>By :</b> <b>#{by}</b>\
+    '''.format(
         by=escape_html(by),
         username=escape_html(username),
-        usage=readable_size(usage) if usage else "Unlimited",
+        data_limit=readable_size(data_limit) if data_limit else "Unlimited",
         expire_date=datetime.fromtimestamp(expire_date).strftime("%H:%M:%S %Y-%m-%d") if expire_date else "Never",
-        protocols=', '.join([p.type for p in proxies])
+        protocols=', '.join([p for p in proxies])
     )
 
     return report(text, keyboard=BotKeyboard.user_menu({
@@ -72,11 +74,13 @@ def report_user_modification(username: str, expire_date: int, usage: str, proxie
 
 
 def report_user_deletion(username: str, by: str):
-    text = """
-⨂ User Deleted by <b>{by}</b>
-➖➖➖➖➖➖➖
-┌ Username: <b>{username}</b>
-    """.format(
+    text = '''\
+🗑 <b>#Deleted</b>
+➖➖➖➖➖➖➖➖➖
+<b>Username</b> : <code>{username}</code>
+➖➖➖➖➖➖➖➖➖
+<b>By</b> : <b>#{by}</b>\
+    '''.format(
         by=escape_html(by),
         username=escape_html(username)
     )
@@ -84,13 +88,48 @@ def report_user_deletion(username: str, by: str):
 
 
 def report_status_change(username: str, status: str):
-    text = """
-⨀ User Status Changed
-➖➖➖➖➖➖➖
-┌ Username: <b>{username}</b>
-└ Status: <b>{status}</b>
-    """.format(
+    _status = {
+        'active': '✅ <b>#Activated</b>',
+        'disabled': '❌ <b>#Disabled</b>',
+        'limited': '🪫 <b>#Limited</b>',
+        'expired': '🕔 <b>#Expired</b>'
+    }
+    text = '''\
+{status}
+➖➖➖➖➖➖➖➖➖
+<b>Username</b> : <code>{username}</code>\
+    '''.format(
         username=escape_html(username),
-        status=status.capitalize()
+        status=_status[status]
     )
+    return report(text)
+
+
+def report_user_usage_reset(username: str, by: str):
+    text = """  
+🔁 <b>#Reset</b>
+➖➖➖➖➖➖➖➖➖
+<b>Username</b> : <code>{username}</code>
+➖➖➖➖➖➖➖➖➖
+<b>By</b> : <b>#{by}</b>\
+    """.format(
+        by=escape_html(by),
+        username=escape_html(username)
+    )
+
+    return report(text)
+
+
+def report_user_subscription_revoked(username: str, by: str):
+    text = """  
+🔁 <b>#Revoked</b>
+➖➖➖➖➖➖➖➖➖
+<b>Username</b> : <code>{username}</code>
+➖➖➖➖➖➖➖➖➖
+<b>By</b> : <b>#{by}</b>\
+    """.format(
+        by=escape_html(by),
+        username=escape_html(username)
+    )
+
     return report(text)

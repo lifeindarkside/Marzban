@@ -2,18 +2,25 @@ from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, Union
 
+from sqlalchemy import and_, delete
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
 
-from app.db.models import (JWT, Admin, Node, Proxy, ProxyHost, ProxyInbound,
-                           ProxyTypes, System, User, UserTemplate,
-                           UserUsageResetLogs, NodeUserUsage, NodeUsage)
+from app.db.models import (JWT, Admin, Node, NodeUsage, NodeUserUsage,
+                           NotificationReminder, Proxy, ProxyHost,
+                           ProxyInbound, ProxyTypes, System, User,
+                           UserTemplate, UserUsageResetLogs)
 from app.models.admin import AdminCreate, AdminModify, AdminPartialModify
-from app.models.node import NodeCreate, NodeModify, NodeStatus, NodeUsageResponse
+from app.models.node import (NodeCreate, NodeModify, NodeStatus,
+                             NodeUsageResponse)
 from app.models.proxy import ProxyHost as ProxyHostModify
-from app.models.user import (UserCreate, UserDataLimitResetStrategy,
-                             UserModify, UserStatus, UserUsageResponse)
+from app.models.user import (ReminderType, UserCreate,
+                             UserDataLimitResetStrategy, UserModify,
+                             UserResponse, UserStatus, UserUsageResponse)
 from app.models.user_template import UserTemplateCreate, UserTemplateModify
+from app.utils.helpers import (calculate_expiration_days,
+                               calculate_usage_percent)
+from app.utils.notification import Notification
+from config import NOTIFY_DAYS_LEFT, NOTIFY_REACHED_USAGE_PERCENT
 
 
 def add_default_host(db: Session, inbound: ProxyInbound):
@@ -71,7 +78,9 @@ def update_hosts(db: Session, inbound_tag: str, modified_hosts: List[ProxyHostMo
             inbound=inbound,
             security=host.security,
             alpn=host.alpn,
-            fingerprint=host.fingerprint
+            fingerprint=host.fingerprint,
+            allowinsecure=host.allowinsecure,
+            is_disabled=host.is_disabled
         ) for host in modified_hosts
     ]
     db.commit()
@@ -204,7 +213,8 @@ def create_user(db: Session, user: UserCreate, admin: Admin = None):
         data_limit=(user.data_limit or None),
         expire=(user.expire or None),
         admin=admin,
-        data_limit_reset_strategy=user.data_limit_reset_strategy
+        data_limit_reset_strategy=user.data_limit_reset_strategy,
+        note=user.note
     )
     db.add(dbuser)
     db.commit()
@@ -250,6 +260,9 @@ def update_user(db: Session, dbuser: User, modify: UserModify):
         if dbuser.status not in (UserStatus.expired, UserStatus.disabled):
             if not dbuser.data_limit or dbuser.used_traffic < dbuser.data_limit:
                 dbuser.status = UserStatus.active
+                if not dbuser.data_limit or (calculate_usage_percent(
+                        dbuser.used_traffic, dbuser.data_limit) < NOTIFY_REACHED_USAGE_PERCENT):
+                    delete_notification_reminder_by_type(db, dbuser.id, ReminderType.data_usage)
             else:
                 dbuser.status = UserStatus.limited
 
@@ -258,11 +271,17 @@ def update_user(db: Session, dbuser: User, modify: UserModify):
         if dbuser.status not in (UserStatus.limited, UserStatus.disabled):
             if not dbuser.expire or dbuser.expire > datetime.utcnow().timestamp():
                 dbuser.status = UserStatus.active
+                if not dbuser.expire or (calculate_expiration_days(
+                        dbuser.expire) > NOTIFY_DAYS_LEFT):
+                    delete_notification_reminder_by_type(db, dbuser.id, ReminderType.expiration_date)
             else:
                 dbuser.status = UserStatus.expired
 
     if modify.data_limit_reset_strategy is not None:
         dbuser.data_limit_reset_strategy = modify.data_limit_reset_strategy.value
+
+    if modify.note is not None:
+        dbuser.note = modify.note or None
 
     db.commit()
     db.refresh(dbuser)
@@ -281,6 +300,29 @@ def reset_user_data_usage(db: Session, dbuser: User):
     if dbuser.status not in (UserStatus.expired or UserStatus.disabled):
         dbuser.status = UserStatus.active.value
     db.add(dbuser)
+
+    db.commit()
+    db.refresh(dbuser)
+    return dbuser
+
+
+def revoke_user_sub(db: Session, dbuser: User):
+    dbuser.sub_revoked_at = datetime.utcnow()
+
+    user = UserResponse.from_orm(dbuser)
+    for proxy_type, settings in user.proxies.copy().items():
+        settings.revoke()
+        user.proxies[proxy_type] = settings
+    dbuser = update_user(db, dbuser, user)
+
+    db.commit()
+    db.refresh(dbuser)
+    return dbuser
+
+
+def update_user_sub(db: Session, dbuser: User, user_agent: str):
+    dbuser.sub_updated_at = datetime.utcnow()
+    dbuser.sub_last_user_agent = user_agent
 
     db.commit()
     db.refresh(dbuser)
@@ -533,3 +575,44 @@ def update_node_status(db: Session, dbnode: Node, status: NodeStatus, message: s
     db.commit()
     db.refresh(dbnode)
     return dbnode
+
+
+def create_notification_reminder(
+        db: Session, reminder_type: ReminderType, expires_at: datetime, user_id: int) -> NotificationReminder:
+    reminder = NotificationReminder(type=reminder_type, expires_at=expires_at, user_id=user_id)
+    db.add(reminder)
+    db.commit()
+    db.refresh(reminder)
+    return reminder
+
+
+def get_notification_reminder(
+        db: Session, user_id: int, reminder_type: ReminderType,
+) -> Union[NotificationReminder, None]:
+    reminder = db.query(NotificationReminder).filter(
+        NotificationReminder.user_id == user_id).filter(
+        NotificationReminder.type == reminder_type).first()
+    if reminder is None:
+        return
+    if reminder.expires_at and reminder.expires_at < datetime.utcnow():
+        db.delete(reminder)
+        db.commit()
+        return
+    return reminder
+
+
+def delete_notification_reminder_by_type(db: Session, user_id: int, reminder_type: ReminderType) -> None:
+    """Deletes notification reminder filtered by user_id and type if exists"""
+    stmt = delete(NotificationReminder).where(
+        NotificationReminder.user_id == user_id,
+        NotificationReminder.type == reminder_type,
+    )
+    db.execute(stmt)
+    db.commit()
+    return
+
+
+def delete_notification_reminder(db: Session, dbreminder: NotificationReminder) -> None:
+    db.delete(dbreminder)
+    db.commit()
+    return

@@ -1,5 +1,6 @@
-import sqlalchemy
 from datetime import datetime
+
+import sqlalchemy
 from fastapi import BackgroundTasks, Depends, HTTPException
 
 from app import app, logger, xray
@@ -37,19 +38,16 @@ def add_user(new_user: UserCreate,
         db.rollback()
         raise HTTPException(status_code=409, detail="User already exists")
 
-    xray.operations.add_user(dbuser)
-
+    bg.add_task(xray.operations.add_user, dbuser=dbuser)
+    user = UserResponse.from_orm(dbuser)
     bg.add_task(
         report.user_created,
+        user=user,
         user_id=dbuser.id,
-        username=dbuser.username,
-        usage=dbuser.data_limit,
-        expire_date=dbuser.expire,
-        proxies=dbuser.proxies,
-        by=admin.username
+        by=admin
     )
     logger.info(f"New user \"{dbuser.username}\" added")
-    return dbuser
+    return user
 
 
 @app.get("/api/user/{username}", tags=['User'], response_model=UserResponse)
@@ -100,22 +98,21 @@ def modify_user(username: str,
     user = UserResponse.from_orm(dbuser)
 
     if user.status == UserStatus.active:
-        xray.operations.update_user(dbuser)
+        bg.add_task(xray.operations.update_user, dbuser=dbuser)
     else:
-        xray.operations.remove_user(dbuser)
+        bg.add_task(xray.operations.remove_user, dbuser=dbuser)
 
     bg.add_task(report.user_updated,
-                username=dbuser.username,
-                usage=dbuser.data_limit,
-                expire_date=dbuser.expire,
-                proxies=dbuser.proxies,
-                by=admin.username)
+                user=user,
+                by=admin)
     logger.info(f"User \"{user.username}\" modified")
 
     if user.status != old_status:
         bg.add_task(report.status_change,
                     username=user.username,
-                    status=user.status)
+                    status=user.status,
+                    user=user,
+                    by=admin)
         logger.info(f"User \"{dbuser.username}\" status changed from {old_status} to {user.status}")
 
     return user
@@ -139,12 +136,12 @@ def remove_user(username: str,
 
     crud.remove_user(db, dbuser)
 
-    xray.operations.remove_user(dbuser)
+    bg.add_task(xray.operations.remove_user, dbuser=dbuser)
 
     bg.add_task(
         report.user_deleted,
         username=dbuser.username,
-        by=admin.username
+        by=admin
     )
     logger.info(f"User \"{username}\" deleted")
     return {}
@@ -152,6 +149,7 @@ def remove_user(username: str,
 
 @app.post("/api/user/{username}/reset", tags=['User'], response_model=UserResponse)
 def reset_user_data_usage(username: str,
+                          bg: BackgroundTasks,
                           db: Session = Depends(get_db),
                           admin: Admin = Depends(Admin.get_current)):
     """
@@ -166,9 +164,47 @@ def reset_user_data_usage(username: str,
 
     dbuser = crud.reset_user_data_usage(db=db, dbuser=dbuser)
     if dbuser.status == UserStatus.active:
-        xray.operations.add_user(dbuser)
+        bg.add_task(xray.operations.add_user, dbuser=dbuser)
+
+    user = UserResponse.from_orm(dbuser)
+    bg.add_task(report.user_data_usage_reset,
+                user=user,
+                by=admin)
+
+    logger.info(f"User \"{username}\"'s usage was reset")
 
     return dbuser
+
+
+@app.post("/api/user/{username}/revoke_sub", tags=['User'], response_model=UserResponse)
+def revoke_user_subscription(username: str,
+                             bg: BackgroundTasks,
+                             db: Session = Depends(get_db),
+                             admin: Admin = Depends(Admin.get_current)):
+    """
+    Revoke users subscription (Subscription link and proxies)
+    """
+    dbuser = crud.get_user(db, username)
+    if not dbuser:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not (admin.is_sudo or (dbuser.admin and dbuser.admin.username == admin.username)):
+        raise HTTPException(status_code=403, detail="You're not allowed")
+
+    dbuser = crud.revoke_user_sub(db=db, dbuser=dbuser)
+
+    if dbuser.status == UserStatus.active:
+        bg.add_task(xray.operations.update_user, dbuser=dbuser)
+    user = UserResponse.from_orm(dbuser)
+    bg.add_task(
+        report.user_subscription_revoked,
+        user=user,
+        by=admin
+    )
+
+    logger.info(f"User \"{username}\" subscription revoked")
+
+    return user
 
 
 @app.get("/api/users", tags=['User'], response_model=UsersResponse)
@@ -212,12 +248,16 @@ def reset_users_data_usage(db: Session = Depends(get_db),
     """
     Reset all users data usage
     """
+    if not admin.is_sudo:
+        raise HTTPException(status_code=403, detail="You're not allowed")
+
     dbadmin = crud.get_admin(db, admin.username)
     crud.reset_all_users_data_usage(db=db, admin=dbadmin)
-    xray.core.restart(xray.config.include_db_users())
+    startup_config = xray.config.include_db_users()
+    xray.core.restart(startup_config)
     for node_id, node in list(xray.nodes.items()):
         if node.connected:
-            xray.operations.restart_node(node_id, xray.config.include_db_users())
+            xray.operations.restart_node(node_id, startup_config)
     return {}
 
 

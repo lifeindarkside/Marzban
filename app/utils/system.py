@@ -72,7 +72,7 @@ def record_realtime_bandwidth() -> None:
     rt_bw.outgoing_packets, rt_bw.packet_sent = io.packets_sent - rt_bw.packet_sent, io.packets_sent
 
 
-def realtime_bandwith() -> RealtimeBandwidthStat:
+def realtime_bandwidth() -> RealtimeBandwidthStat:
     return RealtimeBandwidthStat(
         incoming_bytes=rt_bw.incoming_bytes, outgoing_bytes=rt_bw.outgoing_bytes,
         incoming_packets=rt_bw.incoming_packets, outgoing_packets=rt_bw.outgoing_packets)
@@ -121,17 +121,6 @@ def get_public_ip():
         socket.close()
 
     return '127.0.0.1'
-
-
-def get_public_ip():
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    except socket.error:
-        return '127.0.0.1'
-    finally:
-        s.close()
 
 
 def readable_size(size_bytes):

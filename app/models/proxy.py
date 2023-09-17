@@ -1,14 +1,19 @@
 import json
 from enum import Enum
-from typing import List, Union
+from typing import Optional, Union
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, validator
 
 from app.utils.system import random_password
-from xray_api.types.account import (ShadowsocksAccount, ShadowsocksMethods,
-                                    TrojanAccount, VLESSAccount, VMessAccount,
-                                    XTLSFlows)
+from xray_api.types.account import (
+    ShadowsocksAccount,
+    ShadowsocksMethods,
+    TrojanAccount,
+    VLESSAccount,
+    VMessAccount,
+    XTLSFlows,
+)
 
 
 class ProxyTypes(str, Enum):
@@ -56,20 +61,32 @@ class ProxySettings(BaseModel):
 class VMessSettings(ProxySettings):
     id: UUID = Field(default_factory=uuid4)
 
+    def revoke(self):
+        self.id = uuid4()
+
 
 class VLESSSettings(ProxySettings):
     id: UUID = Field(default_factory=uuid4)
     flow: XTLSFlows = XTLSFlows.NONE
+
+    def revoke(self):
+        self.id = uuid4()
 
 
 class TrojanSettings(ProxySettings):
     password: str = Field(default_factory=random_password)
     flow: XTLSFlows = XTLSFlows.NONE
 
+    def revoke(self):
+        self.password = random_password()
+
 
 class ShadowsocksSettings(ProxySettings):
     password: str = Field(default_factory=random_password)
     method: ShadowsocksMethods = ShadowsocksMethods.CHACHA20_POLY1305
+
+    def revoke(self):
+        self.password = random_password()
 
 
 class ProxyHostSecurity(str, Enum):
@@ -78,27 +95,33 @@ class ProxyHostSecurity(str, Enum):
     tls = "tls"
 
 
-ProxyHostALPN = Enum('ProxyHostALPN', {
-    "none": "",
-    "h2": "h2",
-    "http/1.1": "http/1.1",
-    "h2,http/1.1": "h2,http/1.1",
-})
+ProxyHostALPN = Enum(
+    "ProxyHostALPN",
+    {
+        "none": "",
+        "h2": "h2",
+        "http/1.1": "http/1.1",
+        "h2,http/1.1": "h2,http/1.1",
+    },
+)
 
 
-ProxyHostFingerprint = Enum('ProxyHostFingerprint', {
-    "none": "",
-    "chrome": "chrome",
-    "firefox": "firefox",
-    "safari": "safari",
-    "ios": "ios",
-    "android": "android",
-    "edge": "edge",
-    "360": "360",
-    "qq": "qq",
-    "random": "random",
-    "randomized": "randomized",
-})
+ProxyHostFingerprint = Enum(
+    "ProxyHostFingerprint",
+    {
+        "none": "",
+        "chrome": "chrome",
+        "firefox": "firefox",
+        "safari": "safari",
+        "ios": "ios",
+        "android": "android",
+        "edge": "edge",
+        "360": "360",
+        "qq": "qq",
+        "random": "random",
+        "randomized": "randomized",
+    },
+)
 
 
 class FormatVariables(dict):
@@ -109,31 +132,33 @@ class FormatVariables(dict):
 class ProxyHost(BaseModel):
     remark: str
     address: str
-    port: Union[int, None] = None
-    sni: Union[str, None] = None
-    host: Union[str, None] = None
+    port: Optional[int] = Field(None, nullable=True)
+    sni: Optional[str] = Field(None, nullable=True)
+    host: Optional[str] = Field(None, nullable=True)
     security: ProxyHostSecurity = ProxyHostSecurity.inbound_default
     alpn: ProxyHostALPN = ProxyHostALPN.none
     fingerprint: ProxyHostFingerprint = ProxyHostFingerprint.none
+    allowinsecure: Union[bool, None] = None
+    is_disabled: Union[bool, None] = None
 
     class Config:
         orm_mode = True
 
-    @validator('remark', pre=False, always=True)
+    @validator("remark", pre=False, always=True)
     def validate_remark(cls, v):
         try:
             v.format_map(FormatVariables())
         except ValueError as exc:
-            raise ValueError('Invalid formatting variables')
+            raise ValueError("Invalid formatting variables")
 
         return v
 
-    @validator('address', pre=False, always=True)
+    @validator("address", pre=False, always=True)
     def validate_address(cls, v):
         try:
             v.format_map(FormatVariables())
         except ValueError as exc:
-            raise ValueError('Invalid formatting variables')
+            raise ValueError("Invalid formatting variables")
 
         return v
 

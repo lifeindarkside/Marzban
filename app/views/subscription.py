@@ -1,6 +1,6 @@
 import re
 
-from fastapi import Depends, Header, Request, Response
+from fastapi import Depends, Header, Request, Response, HTTPException, Path
 from fastapi.responses import HTMLResponse
 
 from app import app
@@ -9,7 +9,8 @@ from app.models.user import UserResponse, UserStatus
 from app.templates import render_template
 from app.utils.jwt import get_subscription_payload
 from app.utils.share import generate_subscription
-from config import SUBSCRIPTION_PAGE_TEMPLATE
+from app.utils.share import encode_title
+from config import SUBSCRIPTION_PAGE_TEMPLATE, SUB_UPDATE_INTERVAL, SUB_SUPPORT_URL, SUB_PROFILE_TITLE
 
 
 @app.get("/sub/{token}/", tags=['Subscription'])
@@ -39,6 +40,9 @@ def user_subcription(token: str,
     if not dbuser or dbuser.created_at > sub['created_at']:
         return Response(status_code=204)
 
+    if dbuser.sub_revoked_at and dbuser.sub_revoked_at > sub['created_at']:
+        return Response(status_code=204)
+
     user: UserResponse = UserResponse.from_orm(dbuser)
 
     if "text/html" in accept_header:
@@ -51,13 +55,18 @@ def user_subcription(token: str,
 
     response_headers = {
         "content-disposition": f'attachment; filename="{user.username}"',
-        "profile-update-interval": "12",
+        "profile-web-page-url": str(request.url),
+        "support-url": SUB_SUPPORT_URL,
+        "profile-title": encode_title(SUB_PROFILE_TITLE),
+        "profile-update-interval": SUB_UPDATE_INTERVAL,
         "subscription-userinfo": "; ".join(
             f"{key}={val}"
             for key, val in get_subscription_user_info(user).items()
             if val is not None
         )
     }
+
+    crud.update_user_sub(db, dbuser, user_agent)
 
     if re.match('^([Cc]lash-verge|[Cc]lash-?[Mm]eta)', user_agent):
         conf = generate_subscription(user=user, config_format="clash-meta", as_base64=False)
@@ -66,6 +75,10 @@ def user_subcription(token: str,
     elif re.match('^([Cc]lash|[Ss]tash)', user_agent):
         conf = generate_subscription(user=user, config_format="clash", as_base64=False)
         return Response(content=conf, media_type="text/yaml", headers=response_headers)
+
+    elif re.match('^(SFA|SFI|SFM|SFT)', user_agent):
+        conf = generate_subscription(user=user, config_format="sing-box", as_base64=False)
+        return Response(content=conf, media_type="application/json", headers=response_headers)
 
     else:
         conf = generate_subscription(user=user, config_format="v2ray", as_base64=True)
@@ -83,4 +96,72 @@ def user_subcription_info(token: str,
     if not dbuser or dbuser.created_at > sub['created_at']:
         return Response(status_code=404)
 
+    elif dbuser.sub_revoked_at and dbuser.sub_revoked_at > sub['created_at']:
+        return Response(status_code=404)
+
     return dbuser
+
+
+@app.get("/sub/{token}/{client_type}", tags=['Subscription'])
+def user_subscription_with_client_type(
+    token: str,
+    request: Request,
+    client_type: str = Path(..., regex="sing-box|clash-meta|clash|v2ray"),
+    db: Session = Depends(get_db),
+):
+    """
+    Subscription link, v2ray, clash, sing-box, and clash-meta supported
+    """
+
+    def get_subscription_user_info(user: UserResponse) -> dict:
+        return {
+            "upload": 0,
+            "download": user.used_traffic,
+            "total": user.data_limit,
+            "expire": user.expire,
+        }
+
+    sub = get_subscription_payload(token)
+    if not sub:
+        return Response(status_code=204)
+
+    dbuser = crud.get_user(db, sub['username'])
+    if not dbuser or dbuser.created_at > sub['created_at']:
+        return Response(status_code=204)
+
+    if dbuser.sub_revoked_at and dbuser.sub_revoked_at > sub['created_at']:
+        return Response(status_code=204)
+
+    user: UserResponse = UserResponse.from_orm(dbuser)
+
+    response_headers = {
+        "content-disposition": f'attachment; filename="{user.username}"',
+        "profile-web-page-url": str(request.url),
+        "support-url": SUB_SUPPORT_URL,
+        "profile-title": encode_title(SUB_PROFILE_TITLE),
+        "profile-update-interval": SUB_UPDATE_INTERVAL,
+        "subscription-userinfo": "; ".join(
+            f"{key}={val}"
+            for key, val in get_subscription_user_info(user).items()
+            if val is not None
+        )
+    }
+
+    if client_type == "clash-meta":
+        conf = generate_subscription(user=user, config_format="clash-meta", as_base64=False)
+        return Response(content=conf, media_type="text/yaml", headers=response_headers)
+
+    elif client_type == "sing-box":
+        conf = generate_subscription(user=user, config_format="sing-box", as_base64=False)
+        return Response(content=conf, media_type="application/json", headers=response_headers)
+
+    elif client_type == "clash":
+        conf = generate_subscription(user=user, config_format="clash", as_base64=False)
+        return Response(content=conf, media_type="text/yaml", headers=response_headers)
+
+    elif client_type == "v2ray":
+        conf = generate_subscription(user=user, config_format="v2ray", as_base64=True)
+        return Response(content=conf, media_type="text/plain", headers=response_headers)
+
+    else:
+        raise HTTPException(status_code=400, detail="Invalid subscription type")

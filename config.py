@@ -31,9 +31,15 @@ XRAY_EXCLUDE_INBOUND_TAGS = config("XRAY_EXCLUDE_INBOUND_TAGS", default='').spli
 XRAY_SUBSCRIPTION_URL_PREFIX = config("XRAY_SUBSCRIPTION_URL_PREFIX", default="").strip("/")
 
 
-TELEGRAM_API_TOKEN = config("TELEGRAM_API_TOKEN", default=None)
-TELEGRAM_ADMIN_ID = config("TELEGRAM_ADMIN_ID", cast=int, default=0)
-TELEGRAM_PROXY_URL = config("TELEGRAM_PROXY_URL", default=None)
+TELEGRAM_API_TOKEN = config("TELEGRAM_API_TOKEN", default="")
+TELEGRAM_ADMIN_ID = config(
+    'TELEGRAM_ADMIN_ID',
+    default="",
+    cast=lambda v: [int(i) for i in filter(str.isdigit, (s.strip() for s in v.split(',')))]
+)
+TELEGRAM_PROXY_URL = config("TELEGRAM_PROXY_URL", default="")
+TELEGRAM_LOGGER_CHANNEL_ID = config("TELEGRAM_LOGGER_CHANNEL_ID", cast=int, default=0)
+TELEGRAM_DEFAULT_VLESS_FLOW = config("TELEGRAM_DEFAULT_VLESS_FLOW", default="")
 
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = config("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", cast=int, default=1440)
 
@@ -41,6 +47,8 @@ CUSTOM_TEMPLATES_DIRECTORY = config("CUSTOM_TEMPLATES_DIRECTORY", default=None)
 CLASH_SUBSCRIPTION_TEMPLATE = config("CLASH_SUBSCRIPTION_TEMPLATE", default="clash/default.yml")
 SUBSCRIPTION_PAGE_TEMPLATE = config("SUBSCRIPTION_PAGE_TEMPLATE", default="subscription/index.html")
 HOME_PAGE_TEMPLATE = config("HOME_PAGE_TEMPLATE", default="home/index.html")
+SINGBOX_SUBSCRIPTION_TEMPLATE = config("SINGBOX_SUBSCRIPTION_TEMPLATE", default="singbox/default.json")
+
 
 # USERNAME: PASSWORD
 SUDOERS = {config("SUDO_USERNAME"): config("SUDO_PASSWORD")} \
@@ -51,4 +59,22 @@ SUDOERS = {config("SUDO_USERNAME"): config("SUDO_PASSWORD")} \
 WEBHOOK_ADDRESS = config("WEBHOOK_ADDRESS", default=None)
 WEBHOOK_SECRET = config("WEBHOOK_SECRET", default=None)
 
+# recurrent notifications
+
+# timeout between each retry of sending a notification in seconds
+RECURRENT_NOTIFICATIONS_TIMEOUT = config("RECURRENT_NOTIFICATIONS_TIMEOUT", default=180, cast=int)
+# how many times to try after ok response not recevied after sending a notifications
+NUMBER_OF_RECURRENT_NOTIFICATIONS = config("NUMBER_OF_RECURRENT_NOTIFICATIONS", default=3, cast=int)
+
+# sends a notification when the user uses this much of thier data
+NOTIFY_REACHED_USAGE_PERCENT = config("NOTIFY_REACHED_USAGE_PERCENT", default=80, cast=int)
+
+# sends a notification when there is n days left of their service
+NOTIFY_DAYS_LEFT = config("NOTIFY_DAYS_LEFT", default=3, cast=int)
+
 DISABLE_RECORDING_NODE_USAGE = config("DISABLE_RECORDING_NODE_USAGE", cast=bool, default=False)
+
+# headers: profile-update-interval, support-url, profile-title
+SUB_UPDATE_INTERVAL = config("SUB_UPDATE_INTERVAL", default="12")
+SUB_SUPPORT_URL = config("SUB_SUPPORT_URL", default="https://t.me/")
+SUB_PROFILE_TITLE = config("SUB_PROFILE_TITLE", default="Subscription")

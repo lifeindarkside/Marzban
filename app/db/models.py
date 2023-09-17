@@ -10,7 +10,8 @@ from app.db.base import Base
 from app.models.node import NodeStatus
 from app.models.proxy import (ProxyHostALPN, ProxyHostFingerprint,
                               ProxyHostSecurity, ProxyTypes)
-from app.models.user import UserDataLimitResetStrategy, UserStatus
+from app.models.user import (ReminderType, UserDataLimitResetStrategy,
+                             UserStatus)
 
 
 class Admin(Base):
@@ -33,6 +34,7 @@ class User(Base):
     status = Column(Enum(UserStatus), nullable=False, default=UserStatus.active)
     used_traffic = Column(BigInteger, default=0)
     node_usages = relationship("NodeUserUsage", back_populates="user", cascade="all, delete-orphan")
+    notification_reminders = relationship("NotificationReminder", back_populates="user", cascade="all, delete-orphan")
     data_limit = Column(BigInteger, nullable=True)
     data_limit_reset_strategy = Column(
         Enum(UserDataLimitResetStrategy),
@@ -43,7 +45,12 @@ class User(Base):
     expire = Column(Integer, nullable=True)
     admin_id = Column(Integer, ForeignKey("admins.id"))
     admin = relationship("Admin", back_populates="users")
+    sub_revoked_at = Column(DateTime, nullable=True, default=None)
+    sub_updated_at = Column(DateTime, nullable=True, default=None)
+    sub_last_user_agent = Column(String(512), nullable=True, default=None)
     created_at = Column(DateTime, default=datetime.utcnow)
+    note = Column(String(500), nullable=True, default=None)
+    online_at = Column(DateTime, nullable=True, default=None)
 
     @property
     def lifetime_used_traffic(self):
@@ -174,6 +181,8 @@ class ProxyHost(Base):
 
     inbound_tag = Column(String(256), ForeignKey("inbounds.tag"), nullable=False)
     inbound = relationship("ProxyInbound", back_populates="hosts")
+    allowinsecure = Column(Boolean, nullable=True)
+    is_disabled = Column(Boolean, nullable=True, default=False)
 
 
 class System(Base):
@@ -220,12 +229,13 @@ class NodeUserUsage(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    created_at = Column(DateTime, unique=False, nullable=False) # one hour per record
+    created_at = Column(DateTime, unique=False, nullable=False)  # one hour per record
     user_id = Column(Integer, ForeignKey("users.id"))
     user = relationship("User", back_populates="node_usages")
     node_id = Column(Integer, ForeignKey("nodes.id"))
     node = relationship("Node", back_populates="user_usages")
     used_traffic = Column(BigInteger, default=0)
+
 
 class NodeUsage(Base):
     __tablename__ = "node_usages"
@@ -234,9 +244,19 @@ class NodeUsage(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    created_at = Column(DateTime, unique=False, nullable=False) # one hour per record
+    created_at = Column(DateTime, unique=False, nullable=False)  # one hour per record
     node_id = Column(Integer, ForeignKey("nodes.id"))
     node = relationship("Node", back_populates="usages")
     uplink = Column(BigInteger, default=0)
     downlink = Column(BigInteger, default=0)
 
+
+class NotificationReminder(Base):
+    __tablename__ = "notification_reminders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    user = relationship("User", back_populates="notification_reminders")
+    type = Column(Enum(ReminderType), nullable=False)
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

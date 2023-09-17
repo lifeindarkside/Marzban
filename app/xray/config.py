@@ -6,8 +6,8 @@ from copy import deepcopy
 from pathlib import PosixPath
 from typing import Union
 
-from app.db import GetDB, get_users
-from app.models.proxy import ProxySettings
+from app.db import GetDB, crud
+from app.models.proxy import ProxySettings, ProxyTypes
 from app.models.user import UserStatus
 from app.utils.crypto import get_cert_SANs
 from config import DEBUG, XRAY_EXCLUDE_INBOUND_TAGS, XRAY_FALLBACKS_INBOUND_TAG
@@ -127,6 +127,9 @@ class XRayConfig(dict):
 
     def _resolve_inbounds(self):
         for inbound in self['inbounds']:
+            if not inbound['protocol'] in ProxyTypes._value2member_map_:
+                continue
+
             if inbound['tag'] in XRAY_EXCLUDE_INBOUND_TAGS:
                 continue
 
@@ -316,7 +319,7 @@ class XRayConfig(dict):
         config = self.copy()
 
         with GetDB() as db:
-            for user in get_users(db, status=UserStatus.active):
+            for user in crud.get_users(db, status=UserStatus.active):
                 proxies_settings = {
                     p.type: ProxySettings.from_dict(p.type, p.settings).dict(no_obj=True)
                     for p in user.proxies
